@@ -5,6 +5,8 @@
 This document is the source of the issue body and the follow-up PR comment
 template for [vllm-project/vllm#40991](https://github.com/vllm-project/vllm/pull/40991).
 
+> **Note on cross-repo references:** GitHub auto-links bare `#NNNN` numbers to the *current* repo. When pasting this body into a `vllm-project/vllm` issue, references to LLM Compressor PRs must be fully qualified (`vllm-project/llm-compressor#2647`) or written as a markdown link, otherwise GitHub will mis-link to an unrelated `vllm-project/vllm` issue with the same number.
+
 ---
 
 ## Title
@@ -17,11 +19,11 @@ template for [vllm-project/vllm#40991](https://github.com/vllm-project/vllm/pull
 
 ### Your current environment
 
-- vLLM commit: jasl/vllm@ds4-sm120 base `428e08e` with kylesayrs PR #41276 commit `f910a73a` cherry-picked. The 4 intervening commits between `06e11f8` and current jasl HEAD `68901da` (`2148a6e` FP8 einsum full-group, `2e06cbd` SM12x sparse MLA decode, `68901da` SM120 packed FP8 indexer cache) do **not** touch `vllm/model_executor/layers/quantization/compressed_tensors/`, so the bug semantics described below are bit-identical on `68901da` by construction.
+- vLLM commit: jasl/vllm@ds4-sm120 base `428e08e` with kylesayrs PR [#41276](https://github.com/vllm-project/vllm/pull/41276) commit `f910a73a` cherry-picked. The 4 intervening commits between `06e11f8` and current jasl HEAD `68901da` (`2148a6e` FP8 einsum full-group, `2e06cbd` SM12x sparse MLA decode, `68901da` SM120 packed FP8 indexer cache) do **not** touch `vllm/model_executor/layers/quantization/compressed_tensors/`, so the bug semantics described below are bit-identical on `68901da` by construction.
 - PyTorch: 2.11.0+cu130
 - CUDA: 13.0
 - GPU: 8× NVIDIA H200 (SM 9.0), 141 GB HBM3e each
-- Model: pastapaul/DeepSeek-V4-Flash-W4A16-FP8 (FP8_BLOCK attention + W4A16 GPTQ routed experts, produced via llm-compressor PR #2647 branch `kylesayrs/transformers-v5`, mirrors RedHatAI NVFP4-FP8 recipe topology)
+- Model: pastapaul/DeepSeek-V4-Flash-W4A16-FP8 (FP8_BLOCK attention + W4A16 GPTQ routed experts, group_size=128, produced via [llm-compressor PR vllm-project/llm-compressor#2647](https://github.com/vllm-project/llm-compressor/pull/2647) branch `kylesayrs/transformers-v5`, attention quant mirrors RedHatAI/DeepSeek-V4-Flash-NVFP4-FP8 topology)
 
 ### 🐛 Describe the bug
 
