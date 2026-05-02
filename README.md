@@ -2,7 +2,7 @@
 
 Working directory + artifacts for an in-progress AWQ-W4A16 quantization
 of `deepseek-ai/DeepSeek-V4-Flash` on a single 8× H200 (`p5en.48xlarge`)
-DLAMI box, intended for hak-uma Coder B (DGX Spark, TP=2) deployment via
+DLAMI box, intended for downstream DGX Spark TP=2 deployment via
 Marlin W4A16.
 
 ## Layout
@@ -22,6 +22,13 @@ Marlin W4A16.
   - `quantize_v4_w4a16.py.snapshot` — the recipe (W4A16, dampening 0.1,
     ignore lm_head + self_attn + shared_experts; routed experts targeted).
   - `VERSIONS.md` — repo HEADs, package versions, reproduction checklist.
+- `findings/` — upstream-relevant analyses:
+  - `kylesayrs-pr-41276-integration.md` — five integration gaps in vLLM
+    PR #41276 + llm-compressor PR #2647 documented end-to-end.
+  - `upstream-issue-marlin-tp-sharding.md` — Marlin MoE kernel scale-
+    sharding bug at TP>2, full root cause analysis with empirical TP=1/2/8
+    table.
+- `model-card-draft.md` — draft model card for the HF release.
 
 ## Reproduction
 
