@@ -121,10 +121,30 @@ This earlier run was on `--gpu-memory-utilization 0.92` *without* `--enforce-eag
 4. **Decode ~3–4 tok/s eager** vs ~14–15 tok/s with CUDA graphs. ~4× penalty.
 5. **Worker (rank 1) needs `--headless`** so it waits for head-side RPC broadcasts instead of trying to init its own engine.
 
+## Update — workspace lock retest against newer vLLM (2026-05-04)
+
+Rebuilt as `vllm-w4a16-dsv4:next` against [`jasl/vllm@77bbc16`](https://github.com/jasl/vllm/commit/77bbc16) (current `ds4-sm120` tip, 28 commits ahead of the original `428e08e` build), with the same kylesayrs cherry-pick (`f910a73a93`) + `packed_modules_mapping` patch + transformers `5.8.0.dev0`.
+
+The kylesayrs cherry-pick **auto-merged cleanly** despite both touched files (`vllm/model_executor/layers/deepseek_v4_attention.py` and `vllm/model_executor/models/deepseek_v4.py`) having received changes in the 28-commit advance.
+
+Re-tested the workspace bomb prompt (`en2zh_bus_001`, 1,304 tokens prompt, `max_tokens=4000`) with CUDA graphs back on (no `--enforce-eager`):
+
+```
+AssertionError: Workspace is locked but allocation from
+'deepseek_v4_attention.py:1457:_forward_prefill' requires 21.80 MB,
+current size is 21.62 MB. Workspace growth is not allowed after locking.
+```
+
+**Same crash, same symptom, same locked size (21.62 MB)** across both builds. Only the file line number moved (1454 → 1457, file was edited). The locked size is structural and not influenced by `--max-num-batched-tokens`, `--max-num-seqs`, or `--gpu-memory-utilization`. This rules out the bug being a regression in the original build base — it's the workspace allocator design itself.
+
+Confirmed `:next` runs cleanly under `--enforce-eager` (same recipe as `:latest`): `pong` smoke 38 tokens in 18s, workspace-bomb prompt 1005 tokens in 256.5s = 3.92 tok/s decode.
+
+**Verdict**: ship the `--enforce-eager` recipe as canonical until upstream patches `vllm/v1/worker/workspace.py:_ensure_workspace_size` to allow post-lock growth or DSV4's `_forward_prefill` switches to a non-locked scratch path.
+
 ## Recommended next iterations
 
-1. Rebuild against `jasl/vllm@843fe9e` (current branch tip) to test if the 53-commit gap closes the workspace-lock issue.
-2. If not, patch `workspace.py:_ensure_workspace_size` to allow growth after lock (single-line fix candidate).
-3. Run `scripts/run_long_context_probe.sh` after raising `--max-model-len` (currently capped at 16384) once eager is stable, to validate long-context behavior on Spark.
-4. Run `scripts/run_bench_matrix.sh` for throughput-vs-concurrency curves.
+1. **File / track upstream issue** against `vllm-project/vllm` describing the workspace allocator behavior with this exact repro. Cross-ref [`#40791`](https://github.com/vllm-project/vllm/issues/40791) (related workspace allocation failure with DCP+EAGLE3) and the DSV4 PR [`#40991`](https://github.com/vllm-project/vllm/pull/40991).
+2. As a forward-looking fix, patch `workspace.py:_ensure_workspace_size` to either (a) allow growth after lock with a logged warning or (b) widen the profile run's worst-case sizing.
+3. Run `scripts/run_long_context_probe.sh` after raising `--max-model-len` (currently capped at 16384), once eager is stable, to validate long-context behavior on Spark.
+4. Run `scripts/run_bench_matrix.sh` for throughput-vs-concurrency curves at eager.
 5. Run `scripts/run_lm_eval.sh` (gsm8k/mrcr/etc.) to add Spark-side standardized scores alongside the existing H200 numbers.
