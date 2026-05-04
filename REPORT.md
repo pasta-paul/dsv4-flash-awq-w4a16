@@ -165,7 +165,7 @@ Diagnosis: scale-tensor-not-sharded bug in `compressed_tensors_moe_wna16_marlin`
 
 - **The 16-sample dryrun outperforms native FP4/FP8 baseline on toolcall15 (+2 points).** Failure-set is a strict subset of baseline's; TC-14 (Malformed Response) passes under W4A16 but fails baseline.
 - **First public coherent vLLM serve of W4A16 V4-Flash by anyone.**
-- TP=2 is exactly the hak-uma Coder B Spark target topology, so the Marlin TP scale-sharding bug at TP>2 doesn't block production deployment.
+- TP=2 is exactly the dual-DGX-Spark deployment target, so the Marlin TP scale-sharding bug at TP>2 doesn't block production.
 
 ### Verdict: Phase 3a verified at TP=2; bug in Marlin MoE TP>2 path filed upstream
 The model checkpoint is correct, structurally complete, and produces matching-or-better quality than native FP4/FP8 baseline at TP=2. The Marlin scale-sharding bug at TP>2 is a separate vLLM issue (filed upstream) that doesn't affect TP=2 production deployment.
