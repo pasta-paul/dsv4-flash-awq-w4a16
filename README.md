@@ -131,7 +131,15 @@ vllm serve pastapaul/DeepSeek-V4-Flash-W4A16-FP8 \
 - [x] **Phase 5** — Public HF release at [`pastapaul/DeepSeek-V4-Flash-W4A16-FP8`](https://huggingface.co/pastapaul/DeepSeek-V4-Flash-W4A16-FP8)
 - [x] **Upstream contribution** — vllm-project/vllm#41511 filed; cross-link comment on PR #40991
 
-Standard benchmarks (GSM8K 5-shot, MMLU 5-shot, HumanEval pass@1) are running on the live model post-publish; results being added to the model card incrementally as each completes.
+### Standard benchmarks (live)
+
+| Benchmark | Setting | Score |
+|---|---|---|
+| GSM8K | 5-shot, chat-template, flexible-extract | **92.87% ±0.71%** |
+| MMLU | 5-shot | *running* |
+| HumanEval | 0-shot, pass@1 | *queued* |
+
+Results updated to the [HF model card](https://huggingface.co/pastapaul/DeepSeek-V4-Flash-W4A16-FP8) as each lands.
 
 ## Credits
 
