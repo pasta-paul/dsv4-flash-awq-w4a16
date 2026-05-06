@@ -176,7 +176,7 @@ Same `en2zh_bus_001` 1,304-token prompt that crashes without the patch:
 
 ### Upstream
 
-[`vllm-project/vllm#41700`](https://github.com/vllm-project/vllm/issues/41700) — issue describing the bug, with the patch attached and three proposed upstream fix shapes (opt-in growth post-lock, documented warmup hook, or dummy-run that exercises prefill with synthetic metadata). Cross-referenced from PR #40991 (the active DSV4 merge PR).
+[`vllm-project/vllm#41700`](https://github.com/vllm-project/vllm/issues/41700) — issue describing the bug, with the patch attached and three proposed upstream fix shapes (opt-in growth post-lock, documented warmup hook, or dummy-run that exercises prefill with synthetic metadata). Issue closed 2026-05-05 once `jasl/vllm@1d6f5c4` landed. Cross-referenced from PR [#40991](https://github.com/vllm-project/vllm/pull/40991) (closed 2026-05-06; replaced by [#41834](https://github.com/vllm-project/vllm/pull/41834) — *"[New Model][Nvidia] Add SM12x support for DeepSeek V4 Flash with essential fixes"*, branch `codex/ds4-sm120-min-enable`, currently the active SM12x DSV4 PR).
 
 ## Operational constraints
 

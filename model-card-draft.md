@@ -223,7 +223,7 @@ Built with:
 
 ## Acknowledgements
 
-- [@jasl](https://github.com/jasl) — DeepSeek-V4 vLLM SM12x base support (PR #40991), `e734ace5` memory-pressure-release fix that resolved the Blackwell 256K×2 stall
+- [@jasl](https://github.com/jasl) — DeepSeek-V4 vLLM SM12x base support (originally PR [#40991](https://github.com/vllm-project/vllm/pull/40991), closed 2026-05-06; current upstream tracker is PR [#41834](https://github.com/vllm-project/vllm/pull/41834)). Also `e734ace5` memory-pressure-release fix that resolved the Blackwell 256K×2 stall.
 - [@kylesayrs](https://github.com/kylesayrs) — compressed-tensors V4 attention path (PR #41276)
 - [@aabbccddwasd](https://github.com/aabbccddwasd) — indexer KV cache layout fix
 - [@bbbearxyz](https://github.com/bbbearxyz) — SM12x Triton fallback kernels
