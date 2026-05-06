@@ -12,6 +12,20 @@ The model is **public, self-contained, no HF token required**. You only need acc
 
 No HF token needed for the quant. (The base `deepseek-ai/DeepSeek-V4-Flash` is gated, but you don't need it — the quant ships with all the tokenizer + config files it needs.)
 
+## TL;DR — one shell script
+
+If you just want it running:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/pasta-paul/dsv4-flash-w4a16-fp8/main/scripts/bootstrap_dsv4_spark.sh
+chmod +x bootstrap_dsv4_spark.sh
+./bootstrap_dsv4_spark.sh --head-host spark-a --worker-host spark-b
+```
+
+The script is idempotent — does SSH-reachability check, model download on both nodes (skip if cached), QSFP /30 setup, image build via `eugr/spark-vllm-docker` + our patches, scp-distribute to the worker, container launch on both nodes (head rank 0 + worker rank 1 `--headless`), and waits for `/health=200`. Total ~30–50 min the first time (mostly the docker build); a re-run with `--skip-build` is ~7 min cold start.
+
+If you want to step through it manually or customize, the rest of this doc walks each phase.
+
 ## 1. Network — bring up the QSFP link
 
 On both boxes, configure the QSFP NIC with a /30 between them and jumbo MTU. Example using `enp1s0f0np0`:
