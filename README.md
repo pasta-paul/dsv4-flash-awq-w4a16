@@ -58,7 +58,8 @@ NVFP4 → W4A16 for SM 9.x / 12.x compatibility).
 | Path | What |
 |---|---|
 | **[`scripts/bootstrap_dsv4_spark.sh`](scripts/bootstrap_dsv4_spark.sh)** | **Single-file zero-to-serving script for dual DGX Spark TP=2.** SSH-orchestrated, idempotent, handles every step from network setup through engine boot. |
-| [`scripts/Dockerfile.dsv4-spark`](scripts/Dockerfile.dsv4-spark) | The actual production Dockerfile — `jasl/vllm@${VLLM_REF}` + kylesayrs PR #41276 cherry-pick + `packed_modules_mapping` patch. Drop into an `eugr/spark-vllm-docker` checkout. |
+| [`scripts/Dockerfile.dsv4-spark`](scripts/Dockerfile.dsv4-spark) | The actual production Dockerfile — `jasl/vllm@${VLLM_REF}` + vendored kylesayrs deepseek-ct patch + `packed_modules_mapping` patch. Drop into an `eugr/spark-vllm-docker` checkout. |
+| [`scripts/kylesayrs-deepseek-ct.patch`](scripts/kylesayrs-deepseek-ct.patch) | Vendored vLLM patch (kylesayrs PR #41276 work, pre-rebased onto `jasl/vllm@ds4-sm120`). Pinned by content, not SHA — see [findings/kylesayrs-pr-41276-integration.md#sha-rebase-recovery-issue-1-2026-05-08](findings/kylesayrs-pr-41276-integration.md). |
 | [`scripts/patch_v4_packed_mapping.py`](scripts/patch_v4_packed_mapping.py) | Local patch that adds `packed_modules_mapping` to `DeepseekV4ForCausalLM`. Still required (kylesayrs PR references but doesn't define it). |
 | [`scripts/patch_workspace_prereserve.py`](scripts/patch_workspace_prereserve.py) | **Retired** — landed upstream as `jasl/vllm@1d6f5c4`. Kept for historical reference. |
 | [`scripts/serve_spark_tp2.sh`](scripts/serve_spark_tp2.sh) | Per-rank launch helper (call this once per Spark — used by `bootstrap_dsv4_spark.sh`). |
@@ -89,7 +90,7 @@ Remaining 2 toolcall15 fails (TC-06 Multi-Value Extraction, TC-08 Conditional Br
 
 ## Validation (Phase 5 on dual RTX PRO 6000 Blackwell, TP=2)
 
-Built on the `ds4-sm120-experimental` superset of `ds4-sm120` (commit `abad5dc71` + kylesayrs `f910a73a` cherry-pick + `packed_modules_mapping` patch). Harness HEAD `96785b9`. Single-round chat-smoke / toolcall15; standard lm_eval gates.
+Built on the `ds4-sm120-experimental` superset of `ds4-sm120` (commit `abad5dc71` + vendored kylesayrs deepseek-ct patch (rebased successor of `f910a73a`) + `packed_modules_mapping` patch). Harness HEAD `96785b9`. Single-round chat-smoke / toolcall15; standard lm_eval gates.
 
 | Test | RTX PRO 6000 dual TP=2 | DGX Spark TP=2 (reference) |
 |---|---|---|
@@ -155,16 +156,15 @@ For dual DGX Spark TP=2 the bootstrap script above does this for you. Manual bui
 
 Required pieces (stacked):
 - **`jasl/vllm@ds4-sm120-experimental`** — current branch with the SM12x DSV4 work + the experimental superset (split-KV decode, GB10 fused-MoE config aliases, tuned MLA graph defaults). Use `ds4-sm120` instead if you want the more-conservative PR-tracked branch (~6 commits behind).
-- **Cherry-pick** `f910a73a93` from `neuralmagic/vllm@kylesayrs/deepseek-ct` (vLLM PR #41276 — the V4 attention compressed-tensors path).
+- **Apply** [`scripts/kylesayrs-deepseek-ct.patch`](scripts/kylesayrs-deepseek-ct.patch) — vendored from `neuralmagic/vllm@kylesayrs/deepseek-ct` commit `d09eeb498` (the rebased successor of `f910a73a93`, which was force-pushed out of history — see issue [#1](https://github.com/pasta-paul/dsv4-flash-w4a16-fp8/issues/1)). Pre-rebased onto jasl/vllm so `git apply` works with no 3-way merge.
 - **Patch** [`scripts/patch_v4_packed_mapping.py`](scripts/patch_v4_packed_mapping.py) — adds `packed_modules_mapping` to `DeepseekV4ForCausalLM`. Still needed: PR #41276 references this attribute but doesn't define it.
 - The workspace pre-reservation patch is **no longer needed** — landed upstream as `jasl/vllm@1d6f5c4` (closed our [issue #41700](https://github.com/vllm-project/vllm/issues/41700)).
 
 ```bash
 git clone https://github.com/jasl/vllm.git -b ds4-sm120-experimental vllm
 cd vllm
-git remote add neuralmagic https://github.com/neuralmagic/vllm.git
-git fetch --depth=200 neuralmagic kylesayrs/deepseek-ct
-git cherry-pick f910a73a93     # support ct quantization
+git apply --check ../scripts/kylesayrs-deepseek-ct.patch
+git am --keep-cr ../scripts/kylesayrs-deepseek-ct.patch
 python3 ../scripts/patch_v4_packed_mapping.py vllm/model_executor/models/deepseek_v4.py
 pip install -e . --no-build-isolation
 ```
