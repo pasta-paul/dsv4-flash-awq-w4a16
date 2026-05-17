@@ -22,7 +22,9 @@ chmod +x bootstrap_dsv4_spark.sh
 ./bootstrap_dsv4_spark.sh --head-host spark-a --worker-host spark-b
 ```
 
-The script is idempotent — does SSH-reachability check, model download on both nodes (skip if cached), QSFP /30 setup, image build via `eugr/spark-vllm-docker` + our patches, scp-distribute to the worker, container launch on both nodes (head rank 0 + worker rank 1 `--headless`), and waits for `/health=200`. Total ~30–50 min the first time (mostly the docker build); a re-run with `--skip-build` is ~7 min cold start.
+The script is idempotent — does SSH-reachability check, model download on both nodes (always via `huggingface-cli download` so half-cached states resume rather than pass silently), QSFP /30 setup, image build via `eugr/spark-vllm-docker` + our patches (all three files curled into the build context: Dockerfile + kylesayrs patch + packed_modules patch), scp-distribute to the worker, container launch on both nodes (head rank 0 + worker rank 1 `--headless`), and waits for `/health=200`. Total ~30–50 min the first time (mostly the docker build); a re-run with `--skip-build` is ~7 min cold start.
+
+On success the script writes `/workspace/build-metadata.yaml` (vllm commit, image tag, build date) to `/tmp/dsv4-spark-build-metadata-*.yaml` so you can attach it to any bug report. On failure it dumps last-300-line container logs, container env, `nvidia-smi`, and `dmesg` tail from **both nodes** (head + worker).
 
 If you want to step through it manually or customize, the rest of this doc walks each phase.
 
@@ -56,11 +58,11 @@ The model is 142 GiB. Each Spark loads from its own local HF cache.
 huggingface-cli download pastapaul/DeepSeek-V4-Flash-W4A16-FP8
 ```
 
-Disk path: `~/.cache/huggingface/hub/models--pastapaul--DeepSeek-V4-Flash-W4A16-FP8/`.
+Disk path: `~/.cache/huggingface/hub/models--pastapaul--DeepSeek-V4-Flash-W4A16-FP8/`. `huggingface-cli download` is idempotent and resumes via xet — re-run after any interruption rather than trying to check completeness manually. A half-cached model can pass naive "is any .safetensors present?" checks and then crash the engine at kernel-warmup time with corrupt KV-cache backing tensors.
 
 ## 3. Build the image
 
-The image is `vllm-w4a16-dsv4:exp` built from `jasl/vllm@ds4-sm120-experimental` plus a kylesayrs PR #41276 cherry-pick and a small `packed_modules_mapping` patch. Two ways:
+The image is `vllm-w4a16-dsv4:exp` built from `jasl/vllm@ds4-sm120-experimental` plus the vendored kylesayrs PR #41276 patch and a small `packed_modules_mapping` patch. Two ways:
 
 ### 3a. Build it yourself (recommended — ~25–40 min on a Spark)
 
@@ -69,8 +71,11 @@ The image is `vllm-w4a16-dsv4:exp` built from `jasl/vllm@ds4-sm120-experimental`
 git clone https://github.com/eugr/spark-vllm-docker
 cd spark-vllm-docker
 
-# Get our DSV4-specific Dockerfile + patch script
+# Get our DSV4-specific Dockerfile + the two patches the Dockerfile expects in the build context.
+# All three are required — the Dockerfile fails with "kylesayrs-deepseek-ct.patch: not found"
+# at the COPY step if you skip the patch curl.
 curl -O https://raw.githubusercontent.com/pasta-paul/dsv4-flash-w4a16-fp8/main/scripts/Dockerfile.dsv4-spark
+curl -O https://raw.githubusercontent.com/pasta-paul/dsv4-flash-w4a16-fp8/main/scripts/kylesayrs-deepseek-ct.patch
 curl -O https://raw.githubusercontent.com/pasta-paul/dsv4-flash-w4a16-fp8/main/scripts/patch_v4_packed_mapping.py
 mv Dockerfile.dsv4-spark Dockerfile
 
@@ -85,9 +90,9 @@ mv Dockerfile.dsv4-spark Dockerfile
 `-c <hostname>` will `docker save | scp | docker load` the built image to the second Spark automatically. Image is ~20 GB.
 
 The Dockerfile applies these on top of `jasl/vllm@ds4-sm120-experimental`:
-- Cherry-picks `f910a73a93` from `neuralmagic/vllm@kylesayrs/deepseek-ct` (vLLM PR #41276 — DSV4 compressed-tensors attention)
-- Runs `patch_v4_packed_mapping.py` to inject `packed_modules_mapping` into `DeepseekV4ForCausalLM` (kylesayrs PR references but doesn't define this attr)
-- Skips the workspace pre-reservation patch (now upstream as `jasl@1d6f5c4`)
+- `git am` of [`scripts/kylesayrs-deepseek-ct.patch`](../scripts/kylesayrs-deepseek-ct.patch) — vendored from `neuralmagic/vllm@kylesayrs/deepseek-ct` commit `d09eeb498` (the rebased successor of `f910a73a93`, which was force-pushed out of upstream history; pre-rebased onto `jasl/vllm@ds4-sm120`). We pin patch content rather than a moving upstream SHA — see [issue #1](https://github.com/pasta-paul/dsv4-flash-w4a16-fp8/issues/1) and [`findings/kylesayrs-pr-41276-integration.md`](kylesayrs-pr-41276-integration.md#sha-rebase-recovery-issue-1-2026-05-08) for why.
+- Runs `patch_v4_packed_mapping.py` to inject `packed_modules_mapping` into `DeepseekV4ForCausalLM` (the kylesayrs patch references but doesn't define this attr)
+- Skips the workspace pre-reservation patch (now upstream as `jasl/vllm@1d6f5c4`)
 
 ### 3b. Skip the build, ask for the OCI tarball
 
@@ -141,6 +146,8 @@ DOCKER_FLAGS=(
 )
 ```
 
+**Both env-var blocks are required.** In particular `VLLM_TRITON_MLA_SPARSE_HEAD_BLOCK_SIZE=4` selects the head-block geometry the sparse-MLA Triton kernels were tuned for; if it's missing the kernel can read out of bounds and you get `RuntimeError: Triton Error [CUDA]: an illegal memory access was encountered` in `_dequantize_and_gather_k_kernel` during sparse MLA prefill warmup. If you launch the container manually rather than via the bootstrap script, copy the env block verbatim.
+
 ### On Spark A (rank 0, head, exposes API on `:8888`)
 
 ```bash
@@ -175,6 +182,12 @@ curl http://localhost:8888/v1/models | jq '.data[].id'
 ```
 
 Boot at 1 M-context graphs-ON takes ~5–7 min: ~2:30 weight load, ~2:30 KV-profile + graph capture.
+
+For bug reports, include build provenance:
+
+```bash
+docker exec vllm_node cat /workspace/build-metadata.yaml
+```
 
 ## 6. First requests
 
@@ -247,6 +260,7 @@ The model emits parallel `tool_calls` (one per city) with structured `arguments`
 - **`max-num-seqs=1` at 1 M context.** Multi-stream at long context exceeds 121 GiB UMA per Spark. If you want multi-stream, drop the context: `max-model-len=262144 + max-num-seqs=2` (Phase 4d's previous canonical) is the well-tested versatile alternative.
 - **`--gpu-memory-utilization=0.90` not 0.92.** The experimental build's prefix-cache + split-KV paths reserve a little more memory at startup; 0.92 trips the boundary on first boot.
 - **`--served-model-name` takes multiple values per flag, not a repeated flag.** Use `--served-model-name A B C` (space-separated). vLLM `nargs='+'` semantics mean `--served-model-name A --served-model-name B --served-model-name C` only keeps `C` and the others vanish.
+- **`VLLM_TRITON_MLA_SPARSE_HEAD_BLOCK_SIZE=4` is mandatory** — without it sparse-MLA warmup can crash with an illegal memory access in `_dequantize_and_gather_k_kernel` (see §4 env block).
 - **`VLLM_TRITON_MLA_SPARSE_ALLOW_CUDAGRAPH` not needed on the experimental branch** — `cb60a48` enables SM12x sparse-MLA cudagraph by default.
 - **Worker rank 1 must run with `--headless`.** Without it the worker tries to initialize its own engine and asserts `collective_rpc should not be called on follower node`.
 - **Throughput at 1 M × 1**: smoke ~12 t/s, think-max sustained ~14–15 t/s. NIAH retrieval at 200 K-token haystack: 4/4 positions found.
@@ -267,7 +281,7 @@ ssh spark_b 'docker rm -f vllm_node'
 
 - Full validation report: [`findings/spark_tp2_deployment.md`](spark_tp2_deployment.md)
 - Phase 4e (this canonical): [`findings/spark_tp2_deployment.md#phase-4e`](spark_tp2_deployment.md#phase-4e--production-canonical-at-1-m-context-on-ds4-sm120-experimental-2026-05-06)
-- Build context: [`scripts/Dockerfile.dsv4-spark`](../scripts/Dockerfile.dsv4-spark) + [`scripts/patch_v4_packed_mapping.py`](../scripts/patch_v4_packed_mapping.py)
+- Build context: [`scripts/Dockerfile.dsv4-spark`](../scripts/Dockerfile.dsv4-spark) + [`scripts/kylesayrs-deepseek-ct.patch`](../scripts/kylesayrs-deepseek-ct.patch) + [`scripts/patch_v4_packed_mapping.py`](../scripts/patch_v4_packed_mapping.py)
 - Raw evidence files: `findings/spark_tp2_phase4e_*.json` and `findings/spark_tp2_phase4e_probes/`
 - Upstream PR (current SM12x DSV4 tracker): [`vllm-project/vllm#41834`](https://github.com/vllm-project/vllm/pull/41834) — *"[New Model][Nvidia] Add SM12x support for DeepSeek V4 Flash with essential fixes"*, branch `codex/ds4-sm120-min-enable`. Supersedes the closed [`#40991`](https://github.com/vllm-project/vllm/pull/40991) where our [Spark validation comment](https://github.com/vllm-project/vllm/pull/40991#issuecomment-4385208090) sits. This recipe is validated on `jasl/vllm@ds4-sm120-experimental` (legacy branch, still works).
 - Closed issue (workspace allocator bug we filed and got upstreamed): [`#41700`](https://github.com/vllm-project/vllm/issues/41700)
