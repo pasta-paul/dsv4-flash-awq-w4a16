@@ -69,9 +69,11 @@ vllm serve pastapaul/DeepSeek-V4-Flash-W4A16-FP8 \
   --trust-remote-code
 ```
 
+**Required env vars at runtime (SM 12.x sparse-MLA path):** set `VLLM_TRITON_MLA_SPARSE=1` and `VLLM_TRITON_MLA_SPARSE_HEAD_BLOCK_SIZE=4` in the container or shell that runs `vllm serve`. Without `_HEAD_BLOCK_SIZE=4` the sparse-MLA Triton kernel can crash during warmup with `RuntimeError: Triton Error [CUDA]: an illegal memory access was encountered` in `_dequantize_and_gather_k_kernel` — the kernel falls back to a default block size that doesn't match V4-Flash's head dim. The full env block (NCCL, TileLang, HF cache flags) is at [QUICKSTART_DUAL_SPARK.md §4](https://github.com/pasta-paul/dsv4-flash-w4a16-fp8/blob/main/findings/QUICKSTART_DUAL_SPARK.md#4-launch--head--worker).
+
 **Tensor parallelism**: TP=2 is the only validated configuration. TP=1 OOMs on a single 141 GB H200; TP≥4 hits an upstream W4A16 MoE scale-sharding bug ([vllm-project/vllm#41511](https://github.com/vllm-project/vllm/issues/41511)).
 
-**Required vLLM build**: This model does not load on vanilla vLLM. The exact toolchain — `jasl/vllm@ds4-sm120` (or `ds4-sm120-experimental` for the bleeding edge) + `kylesayrs/deepseek-ct` cherry-pick + `packed_modules_mapping` patch — is in the [reproduction repo](https://github.com/pasta-paul/dsv4-flash-w4a16-fp8). For SM 12.x hardware (DGX Spark / GB10 / RTX PRO 6000 / RTX 50-series), the workspace pre-reservation patch landed upstream as `jasl/vllm@1d6f5c4` (was [`vllm-project/vllm#41700`](https://github.com/vllm-project/vllm/issues/41700)); check it out instead of carrying the local patch.
+**Required vLLM build**: This model does not load on vanilla vLLM. The exact toolchain — `jasl/vllm@ds4-sm120` (or `ds4-sm120-experimental` for the bleeding edge) + the vendored [`scripts/kylesayrs-deepseek-ct.patch`](https://github.com/pasta-paul/dsv4-flash-w4a16-fp8/blob/main/scripts/kylesayrs-deepseek-ct.patch) (kylesayrs PR #41276, content-pinned rebased successor of `f910a73a93` which was force-pushed out of upstream history; see [issue #1](https://github.com/pasta-paul/dsv4-flash-w4a16-fp8/issues/1)) + `packed_modules_mapping` patch — is in the [reproduction repo](https://github.com/pasta-paul/dsv4-flash-w4a16-fp8). The single-file bootstrap script `scripts/bootstrap_dsv4_spark.sh` does the whole stack zero-to-serving on dual DGX Spark. For SM 12.x hardware (DGX Spark / GB10 / RTX PRO 6000 / RTX 50-series), the workspace pre-reservation patch landed upstream as `jasl/vllm@1d6f5c4` (was [`vllm-project/vllm#41700`](https://github.com/vllm-project/vllm/issues/41700)); check it out instead of carrying the local patch.
 
 **Blackwell sm_120 note (RTX PRO 6000):** vLLM's FlashInfer-based top-p / top-k sampler JIT mis-parses the `TORCH_CUDA_ARCH_LIST=12.0a` arch token and raises `RuntimeError: FlashInfer requires GPUs with sm75 or higher` (the GPU is sm_120 — way above sm_75; the parser just doesn't recognize the `12.0a` token). Set `VLLM_USE_FLASHINFER_SAMPLER=0` to fall back to the PyTorch-native sampler.
 
@@ -206,8 +208,9 @@ oneshot(
 - `shared_experts` excluded (BF16) — including them triggers `NotImplementedError("DeepSeekV4 requires FP8 attention quantization")` on shared_expert routing.
 - TP > 2 is BLOCKED by [vllm-project/vllm#41511](https://github.com/vllm-project/vllm/issues/41511) (W4A16 MoE scale-sharding).
 - SM 12.x deployment requires the workspace pre-reservation, but the patch landed upstream as `jasl/vllm@1d6f5c4` so just check out a recent enough `ds4-sm120` tip rather than carrying the local patch.
-- **`packed_modules_mapping` patch is still required** as of `ds4-sm120-experimental@abad5dc71` (2026-05-05) — kylesayrs `f910a73a` does not add the class attribute. Drop-in patch in [`patches/packed_modules_mapping.diff`](https://github.com/pasta-paul/dsv4-flash-w4a16-fp8/blob/main/patches/packed_modules_mapping.diff). Note `gate_up_proj` must map to `["w1", "w3"]` (not `gate_proj/up_proj`) to match the recipe ignore list naming for shared experts.
+- **`packed_modules_mapping` patch is still required** as of `ds4-sm120-experimental@abad5dc71` (2026-05-05) — the kylesayrs deepseek-ct patch does not add the class attribute. Drop-in patch in [`patches/packed_modules_mapping.diff`](https://github.com/pasta-paul/dsv4-flash-w4a16-fp8/blob/main/patches/packed_modules_mapping.diff). Note `gate_up_proj` must map to `["w1", "w3"]` (not `gate_proj/up_proj`) to match the recipe ignore list naming for shared experts.
 - **FlashInfer JIT** mis-parses `TORCH_CUDA_ARCH_LIST=12.0a` on RTX PRO 6000 sm_120 — set `VLLM_USE_FLASHINFER_SAMPLER=0` to fall back to PyTorch-native sampler.
+- **Runtime env var requirement:** `VLLM_TRITON_MLA_SPARSE_HEAD_BLOCK_SIZE=4` must be set on the SM 12.x sparse-MLA path or kernel warmup crashes with an illegal memory access in `_dequantize_and_gather_k_kernel`. See Inference section above for the full env block reference.
 
 ## Reproduction
 
@@ -218,8 +221,8 @@ Built with:
 - `huggingface/transformers` `add-deepseek-v4` (PR #45643), `5.8.0.dev0`
 - `compressed-tensors` `0.15.1.a20260428`
 - PyTorch `2.11.0+cu130` (calibration on H200) / `2.11.0+cu128` (serving on RTX PRO 6000)
-- vLLM (calibration verify): `jasl/vllm@428e08e` + `neuralmagic/kylesayrs/deepseek-ct@f910a73a` cherry-picked + `packed_modules_mapping` patch + workspace pre-reservation patch (commit `0ac3de079`)
-- vLLM (RTX PRO 6000 serving): `jasl/vllm@ds4-sm120-experimental@abad5dc71` + same cherry-pick + `packed_modules_mapping` patch (workspace patch now upstream as `1d6f5c4`)
+- vLLM (calibration verify, 2026-05-02): `jasl/vllm@428e08e` + `neuralmagic/kylesayrs/deepseek-ct@f910a73a` cherry-picked + `packed_modules_mapping` patch + workspace pre-reservation patch (commit `0ac3de079`). The SHA `f910a73a` was later force-pushed out of upstream history on ~2026-05-08; current builds apply the content-pinned rebased successor `d09eeb498` via the vendored [`scripts/kylesayrs-deepseek-ct.patch`](https://github.com/pasta-paul/dsv4-flash-w4a16-fp8/blob/main/scripts/kylesayrs-deepseek-ct.patch).
+- vLLM (RTX PRO 6000 serving, 2026-05-05): `jasl/vllm@ds4-sm120-experimental@abad5dc71` + the vendored kylesayrs-deepseek-ct.patch (content-pinned rebased successor of `f910a73a`) + `packed_modules_mapping` patch (workspace patch now upstream as `1d6f5c4`)
 
 ## Acknowledgements
 
