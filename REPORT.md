@@ -4,6 +4,8 @@
 **Hardware:** AWS p5en.48xlarge (8× H200 SM 9.0, 141 GB HBM3e each, 2 TiB RAM, DLAMI Ubuntu 24.04 PyTorch 2.10).
 **Mission start (UTC):** 2026-05-01T14:46:19Z
 
+> **Historical-document note (2026-05-15):** This is a phase-by-phase log of what was applied at the time of each phase. SHA references to `neuralmagic/vllm@kylesayrs/deepseek-ct@f910a73a93` (and Phase 4's `jasl/vllm@77bbc16` tip) reflect what existed in upstream history when those phases ran. Kyle force-pushed `kylesayrs/deepseek-ct` on ~2026-05-08 and rewrote `f910a73a93` out of history; current builds apply the content-pinned rebased successor `d09eeb498` via the vendored [`scripts/kylesayrs-deepseek-ct.patch`](scripts/kylesayrs-deepseek-ct.patch). For the current build flow see the [README quickstart](README.md#quickstart--dual-dgx-spark-tp2), [`scripts/bootstrap_dsv4_spark.sh`](scripts/bootstrap_dsv4_spark.sh), [`scripts/Dockerfile.dsv4-spark`](scripts/Dockerfile.dsv4-spark), and [`findings/kylesayrs-pr-41276-integration.md`](findings/kylesayrs-pr-41276-integration.md#sha-rebase-recovery-issue-1-2026-05-08).
+
 ## Storage decision
 **Workspace lives on ephemeral NVMe.** `/workspace` is a symlink to `/opt/dlami/nvme/workspace`, which sits on a 28 TB LVM volume across 8× 3.5 TB local NVMe drives (DLAMI pre-mount).
 
